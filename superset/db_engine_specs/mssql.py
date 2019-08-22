@@ -26,8 +26,8 @@ import logging
 
 import sqlparse
 
-from sqlparse.tokens import Token, Keyword
-from sqlparse.sql import Identifier, TokenList, Function
+from sqlparse.tokens import Keyword
+from sqlparse.sql import Identifier, Token, TokenList, Function
 
 from superset.db_engine_specs.base import BaseEngineSpec, LimitMethod
 from superset.sql_parse import ParsedQuery
@@ -82,14 +82,7 @@ class MssqlQuery(ParsedQuery):
                 logging.info('Extracting CTEs {}'.format(self.ctes))
                 logging.info('Extracting query {}'.format(self.cte_query))
 
-    def _extract_limit_from_query(self, statement: TokenList) -> Optional[int]:
-        """
-        Extract limit clause from SQL statement.
-
-        :param statement: SQL statement
-        :return: Limit extracted from query, None if no limit present in statement
-        """
-
+    def _find_limit_token(self, statement: TokenList) -> Optional[Token]:
         idx, token = statement.token_next_by(i=(Function,))
 
         if idx is not None and token.token_first().value.lower() == "top":
@@ -97,7 +90,7 @@ class MssqlQuery(ParsedQuery):
             if not next_token:
                 return None
             if isinstance(next_token, sqlparse.sql.Parenthesis) and len(next_token.tokens) == 3:
-                return int(next_token.tokens[1].value)
+                return next_token.tokens[1]
         
         idx, token = statement.token_next_by(i=(Identifier,))
 
@@ -106,7 +99,22 @@ class MssqlQuery(ParsedQuery):
             if not next_token:
                 return None
             if next_token.ttype == sqlparse.tokens.Literal.Number.Integer:
-                return int(next_token.value)
+                return next_token
+        
+        return None
+
+    def _extract_limit_from_query(self, statement: TokenList) -> Optional[int]:
+        """
+        Extract limit clause from SQL statement.
+
+        :param statement: SQL statement
+        :return: Limit extracted from query, None if no limit present in statement
+        """
+
+        limit_token = self._find_limit_token(statement)
+
+        if limit_token is not None:
+            return int(limit_token.value)
         
         return None
 
@@ -115,21 +123,16 @@ class MssqlQuery(ParsedQuery):
         if not self._limit:
             return f"{self.ctes}, inner_qry as (\n{self.cte_query}\n)\nSELECT TOP {new_limit} * FROM inner_qry"
         
-        limit_pos = None
-        statement = self._parsed_cte_query[0]
-        # Add all items to before_str until there is a limit
-        for pos, item in enumerate(statement.tokens):
-            if item.ttype in Keyword and item.value.lower() == "top":
-                limit_pos = pos
-                break
-        _, limit = statement.token_next(idx=limit_pos)
-        if limit.ttype == sqlparse.tokens.Literal.Number.Integer:
-            limit.value = new_limit
+        statement = self._parsed_cte_query
+        
+        limit_token = self._find_limit_token(statement)
+
+        limit_token.value = new_limit
 
         str_res = ""
         for i in statement.tokens:
             str_res += str(i.value)
-        return f"{self.ctes}\n{str_res}"
+        return f"{self.ctes}{str_res}"
     
     def get_query_with_new_limit(self, new_limit: int) -> str:
         """
@@ -145,16 +148,12 @@ class MssqlQuery(ParsedQuery):
 
         if not self._limit:
             return f"{self.ctes}\nSELECT TOP {new_limit} FROM (\n{self.stripped()}\n)"
+        
         limit_pos = None
         statement = self._parsed[0]
-        # Add all items to before_str until there is a limit
-        for pos, item in enumerate(statement.tokens):
-            if item.ttype in Keyword and item.value.lower() == "top":
-                limit_pos = pos
-                break
-        _, limit = statement.token_next(idx=limit_pos)
-        if limit.ttype == sqlparse.tokens.Literal.Number.Integer:
-            limit.value = new_limit
+        limit_token = self._find_limit_token(statement)
+
+        limit_token.value = new_limit
 
         str_res = ""
         for i in statement.tokens:
