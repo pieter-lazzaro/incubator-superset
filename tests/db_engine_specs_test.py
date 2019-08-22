@@ -196,13 +196,6 @@ class DbEngineSpecsTestCase(SupersetTestCase):
         self.assertEqual(engine_spec_class.get_limit_from_sql(q10), None)
         self.assertEqual(engine_spec_class.get_limit_from_sql(q11), None)
 
-    def test_wrapped_query(self):
-        self.sql_limit_regex(
-            "SELECT * FROM a",
-            "SELECT * \nFROM (SELECT * FROM a) AS inner_qry\n LIMIT 1000 OFFSET 0",
-            MssqlEngineSpec,
-        )
-
     @unittest.skipUnless(
         SupersetTestCase.is_module_installed("MySQLdb"), "mysqlclient not installed"
     )
@@ -967,3 +960,29 @@ class DbEngineSpecsTestCase(SupersetTestCase):
         else:
             expected = ["VARCHAR(255)", "VARCHAR(255)", "FLOAT"]
         self.assertEquals(col_names, expected)
+
+    def test_cte_query(self):
+        database = get_example_database()
+        cte_query = "WITH t AS (SELECT 1 a) SELECT * FROM t"
+        limit = 10
+        result_mssql = MssqlEngineSpec.apply_limit_to_sql(cte_query, limit, database)
+        result_mysql = MySQLEngineSpec.apply_limit_to_sql(cte_query, limit, database)
+        self.assertEqual(result_mssql, "WITH t AS (SELECT 1 a), inner_qry as (\nSELECT * FROM t\n)\nSELECT TOP 10 * FROM inner_qry")
+        self.assertEqual(result_mysql, cte_query + "\nLIMIT 10")
+    
+    def test_mssql_extract_limit_from_query(self, engine_spec_class=MssqlEngineSpec):
+        q0 = "select * from table"
+        q1 = "select top 10 * from mytable"
+        q2 = "select top 20 * from (select top 10 * from my_subquery) where col=1"
+        q3 = "select * from (select top 10 * from my_subquery);"
+        q4 = "select top 20 * from (select top 10 * from my_subquery) where col=1;"
+        q5 = "select top (10) * from mytable"
+        q6 = "with mytable as (select * from a) select top 10 * from mytable"
+
+        self.assertEqual(engine_spec_class.get_limit_from_sql(q0), None)
+        self.assertEqual(engine_spec_class.get_limit_from_sql(q1), 10)
+        self.assertEqual(engine_spec_class.get_limit_from_sql(q2), 20)
+        self.assertEqual(engine_spec_class.get_limit_from_sql(q3), None)
+        self.assertEqual(engine_spec_class.get_limit_from_sql(q4), 20)
+        self.assertEqual(engine_spec_class.get_limit_from_sql(q5), 10)
+        self.assertEqual(engine_spec_class.get_limit_from_sql(q6), 10)
