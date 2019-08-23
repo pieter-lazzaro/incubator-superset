@@ -16,20 +16,20 @@
 # under the License.
 # pylint: disable=C,R,W
 from datetime import datetime
+
+import logging
+
 import re
 from typing import List, Optional, Tuple
 
 from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.types import String, TypeEngine, UnicodeText
 
-import logging
-
 import sqlparse
-
+from sqlparse.sql import Function, Identifier, Token, TokenList
 from sqlparse.tokens import Keyword
-from sqlparse.sql import Identifier, Token, TokenList, Function
 
-from superset.db_engine_specs.base import BaseEngineSpec, LimitMethod
+from superset.db_engine_specs.base import BaseEngineSpec
 from superset.sql_parse import ParsedQuery
 
 
@@ -38,7 +38,7 @@ class MssqlQuery(ParsedQuery):
         super().__init__(sql_statement)
         self._parsed_ctes: TokenList = None
         self._parsed_cte_query: TokenList = None
-        
+
         for statement in self._parsed:
             self._extract_ctes(statement)
             if self.has_cte:
@@ -48,13 +48,13 @@ class MssqlQuery(ParsedQuery):
 
     @property
     def has_cte(self) -> bool:
-        return self._parsed_ctes != None
-    
+        return self._parsed_ctes is not None
+
     @property
     def ctes(self) -> str:
         if not self.has_cte:
             return ''
-        
+
         cte_str = ''
         for token in self._parsed_ctes.tokens:
             cte_str += token.value
@@ -77,8 +77,8 @@ class MssqlQuery(ParsedQuery):
         for (i, token) in enumerate(statement.tokens):
             if self.__is_cte(token):
                 (idx, next_token) = statement.token_next(i)
-                self._parsed_ctes = TokenList(tokens=statement.tokens[:idx+1])
-                self._parsed_cte_query = TokenList(tokens=statement.tokens[idx+1:])
+                self._parsed_ctes = TokenList(tokens=statement.tokens[: idx + 1])
+                self._parsed_cte_query = TokenList(tokens=statement.tokens[idx + 1 :])
                 logging.info('Extracting CTEs {}'.format(self.ctes))
                 logging.info('Extracting query {}'.format(self.cte_query))
 
@@ -89,9 +89,12 @@ class MssqlQuery(ParsedQuery):
             _, next_token = token.token_next(0)
             if not next_token:
                 return None
-            if isinstance(next_token, sqlparse.sql.Parenthesis) and len(next_token.tokens) == 3:
+            if (
+                isinstance(next_token, sqlparse.sql.Parenthesis)
+                and len(next_token.tokens) == 3
+            ):
                 return next_token.tokens[1]
-        
+
         idx, token = statement.token_next_by(i=(Identifier,))
 
         if idx is not None and token.value.lower() == "top":
@@ -100,7 +103,7 @@ class MssqlQuery(ParsedQuery):
                 return None
             if next_token.ttype == sqlparse.tokens.Literal.Number.Integer:
                 return next_token
-        
+
         return None
 
     def _extract_limit_from_query(self, statement: TokenList) -> Optional[int]:
@@ -115,25 +118,26 @@ class MssqlQuery(ParsedQuery):
 
         if limit_token is not None:
             return int(limit_token.value)
-        
+
         return None
 
     def get_cte_query_with_new_limit(self, new_limit: int) -> str:
-        
+
         if not self._limit:
             return f"{self.ctes}, inner_qry as (\n{self.cte_query}\n)\nSELECT TOP {new_limit} * FROM inner_qry"
-        
+
         statement = self._parsed_cte_query
-        
+
         limit_token = self._find_limit_token(statement)
 
-        limit_token.value = new_limit
+        if limit_token is not None:
+            limit_token.value = new_limit
 
         str_res = ""
         for i in statement.tokens:
             str_res += str(i.value)
         return f"{self.ctes}{str_res}"
-    
+
     def get_query_with_new_limit(self, new_limit: int) -> str:
         """
         returns the query with the specified limit.
@@ -148,17 +152,18 @@ class MssqlQuery(ParsedQuery):
 
         if not self._limit:
             return f"{self.ctes}\nSELECT TOP {new_limit} FROM (\n{self.stripped()}\n)"
-        
-        limit_pos = None
+
         statement = self._parsed[0]
         limit_token = self._find_limit_token(statement)
 
-        limit_token.value = new_limit
+        if limit_token is not None:
+            limit_token.value = new_limit
 
         str_res = ""
         for i in statement.tokens:
             str_res += str(i.value)
         return str_res
+
 
 class MssqlEngineSpec(BaseEngineSpec):
     engine = "mssql"
@@ -227,7 +232,7 @@ class MssqlEngineSpec(BaseEngineSpec):
         :param database: Database instance
         :return: SQL query with limit clause
         """
-        
+
         parsed_query = MssqlQuery(sql)
         sql = parsed_query.get_query_with_new_limit(limit)
         return sql

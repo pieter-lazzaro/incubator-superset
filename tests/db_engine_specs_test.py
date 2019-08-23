@@ -967,16 +967,19 @@ class DbEngineSpecsTestCase(SupersetTestCase):
         limit = 10
         result_mssql = MssqlEngineSpec.apply_limit_to_sql(cte_query, limit, database)
         result_mysql = MySQLEngineSpec.apply_limit_to_sql(cte_query, limit, database)
-        self.assertEqual(result_mssql, "WITH t AS (SELECT 1 a), inner_qry as (\nSELECT * FROM t\n)\nSELECT TOP 10 * FROM inner_qry")
+        self.assertEqual(
+            result_mssql,
+            "WITH t AS (SELECT 1 a), inner_qry as (\nSELECT * FROM t\n)\nSELECT TOP 10 * FROM inner_qry",
+        )
         self.assertEqual(result_mysql, cte_query + "\nLIMIT 10")
-    
+
     def test_mssql_cte_query_with_limit(self):
         database = get_example_database()
         cte_query = "WITH t AS (SELECT 1 a) SELECT TOP 20 * FROM t"
         limit = 10
         result_mssql = MssqlEngineSpec.apply_limit_to_sql(cte_query, limit, database)
         self.assertEqual(result_mssql, "WITH t AS (SELECT 1 a) SELECT TOP 10 * FROM t")
-    
+
     def test_mssql_extract_limit_from_query(self, engine_spec_class=MssqlEngineSpec):
         q0 = "select * from table"
         q1 = "select top 10 * from mytable"
